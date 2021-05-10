@@ -1,0 +1,26 @@
+name: cyolo_score_following
+
+channels:
+  - pytorch
+  - defaults
+
+dependencies:
+  - python=3.7
+  - Cython
+  - matplotlib
+  - numpy
+  - pytorch
+  - scipy
+  - torchvision
+  - torchaudio
+  - tqdm
+
+  - pip:
+    - madmom==0.16.1 
+    - opencv_python==3.4.3.18
+    - pysoundfile==0.9.0.post1
+    - pyyaml==5.2
+    - tensorboard
+    - librosa
+
+
