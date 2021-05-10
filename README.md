@@ -75,7 +75,7 @@ It is also possible to train a model using multiple GPUs, e.g., if you have acce
 --config ./models/configs/cyolo.yaml --augment --dump_root <DUMP-DIR> --log_root <LOG-DIR> --tag cyolo`
 
 By adapting this command it might be possible to also train across multiple nodes, but we only tested it for a single node.
-Please check https://pytorch.org/tutorials/beginner/aws_distributed_training_tutorial.html and
+Please check https://pytorch.org/tutorials/beginner/dist_overview.html and
 https://pytorch.org/docs/stable/distributed.html for more information on distributed training.
 
 ## Evaluation
