@@ -67,7 +67,7 @@ To give you an example, if you want to train the model called *CYOLO* in Table 2
 `python train.py --train_set ../data/msmd/msmd_train --val_set ../data/msmd/msmd_valid 
 --config ./models/configs/cyolo.yaml --augment --dump_root <DUMP-DIR> --log_root <LOG-DIR> --tag cyolo`
 
-If you have enough memory you can additionally specify `--load_wav`, which will load the audio wav files into the memory.
+If you have enough memory you can additionally specify `--load_audio`, which will load the audio wav files into the memory.
 
 It is also possible to train a model using multiple GPUs, e.g., if you have access to four GPUs you can train the previous model by calling:
 `python -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 --master_addr=<IP>
