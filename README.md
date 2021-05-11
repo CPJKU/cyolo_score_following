@@ -4,7 +4,7 @@ This repository contains the corresponding code for our paper
 
 >[Henkel F.](https://www.jku.at/en/institute-of-computational-perception/about-us/people/florian-henkel/) and 
 >[Widmer G.](https://www.jku.at/en/institute-of-computational-perception/about-us/people/gerhard-widmer/) <br>
-"[Multi-modal Conditional Bounding Box Regression for Music Score Following]()".<br>
+"[Multi-modal Conditional Bounding Box Regression for Music Score Following](https://arxiv.org/pdf/2105.04309.pdf)".<br>
 *In Proceedings of the 29th European Signal Processing Conference (EUSIPCO)*, 2021
 
 ### Data
