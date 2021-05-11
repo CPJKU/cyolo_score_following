@@ -83,11 +83,11 @@ To reproduce the results shown in Table 2, we provide you with our trained model
 [`trained_models`](https://github.com/CPJKU/cyolo_score_following/tree/eusipco-2021/trained_models).
 To evaluate a single model on the test set you need to run the following command:
 
-`python eval.py --param_path ../trained_models/<MODEL-FOLDER>/best_model.pt --test_dir ../data/msmd/msmd_test --eval_onsets`
+`python eval.py --param_path ../trained_models/<MODEL-FOLDER>/best_model.pt --test_dir ../data/msmd/msmd_test --only_onsets`
 
 e.g., if you want to evaluate the conditional YOLO model trained with impulse response augmentation (CYOLO-IR), you need to execute:
 
-`python eval.py --param_path ../trained_models/cyolo_ir/best_model.pt --test_dir ../data/msmd/msmd_test --eval_onsets`
+`python eval.py --param_path ../trained_models/cyolo_ir/best_model.pt --test_dir ../data/msmd/msmd_test --only_onsets`
 
 If you want to print statistics for each piece and page separately you can add the `--print_piecewise` flag.
 You can also evaluate only a subset from a provided directory by specifying an additional split file `--split_file ../data/msmd/split_files/<split>.yaml`.
