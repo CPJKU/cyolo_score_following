@@ -10,7 +10,7 @@ import numpy as np
 
 from cyolo_score_following.utils.data_utils import load_sequences, SAMPLE_RATE, FPS, FRAME_SIZE, HOP_SIZE
 from cyolo_score_following.utils.dist_utils import is_main_process
-from cyolo_score_following.utils.general import load_wav, AverageMeter, get_max_box
+from cyolo_score_following.utils.general import load_wav, AverageMeter, get_max_box, xywh2xyxy, box_iou
 from cyolo_score_following.augmentations.impulse_response import ImpulseResponse
 from cyolo_score_following.utils.general import load_yaml
 
@@ -19,10 +19,12 @@ from torch.utils.data import Dataset
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 
+CLASS_MAPPING = {0: 'Note', 1: 'Bar', 2: 'System'}
+
 
 class SequenceDataset(Dataset):
     def __init__(self, scores, performances, sequences, piece_names, interpol_c2o,
-                 staff_coords, add_per_staff, augment=False, transform=None):
+                 staff_coords, add_per_staff, predict_sb=False, augment=False, transform=None):
 
         self.scores = scores
         self.performances = performances
@@ -34,6 +36,8 @@ class SequenceDataset(Dataset):
         self.interpol_c2o = interpol_c2o
         self.staff_coords = staff_coords
         self.add_per_staff = add_per_staff
+
+        self.predict_sb = predict_sb
 
         self.fps = FPS
         self.sample_rate = SAMPLE_RATE
@@ -73,12 +77,19 @@ class SequenceDataset(Dataset):
 
         true_position, page_nr = seq['true_position'][:2], seq['true_position'][-1]
 
+        notes_available = true_position[0] >= 0
         max_y_shift = seq['max_y_shift']
         max_x_shift = seq['max_x_shift']
 
         page_nr = int(page_nr)
 
         s = score[page_nr]
+
+        system = np.asarray(seq['true_system'], dtype=np.float32)
+        system /= scale_factor
+
+        bar = np.asarray(seq['true_bar'], dtype=np.float32)
+        bar /= scale_factor
 
         true_pos = np.copy(true_position)
 
@@ -97,14 +108,31 @@ class SequenceDataset(Dataset):
             s = np.roll(s, yshift, 0)
             s = np.roll(s, xshift, 1)
 
+            # System [center_x, center_y, width, height]
+            system[0] += xshift
+            system[1] += yshift
+
+            bar[0] += xshift
+            bar[1] += yshift
+
             # pad signal randomly by 0-20 frames (0-1seconds)
             truncated_signal = np.pad(truncated_signal, (random.randint(0, int(self.fps)) * self.hop_length, 0),
                                       mode='constant')
 
         center_y, center_x = true_pos
 
-        target = np.asarray([[0, 0, center_x/s.shape[1], center_y/s.shape[0], width/s.shape[1], height/s.shape[0]]],
-                            dtype=np.float32)
+        target = []
+
+        # target = [[0, 0, center_x/s.shape[1], center_y/s.shape[0], width/s.shape[1], height/s.shape[0], close_to_page_end]]
+        if notes_available:
+            target.append([0, 0, center_x/s.shape[1], center_y/s.shape[0], width/s.shape[1], height/s.shape[0]])
+        # target = []
+
+        if self.predict_sb:
+            target.append([0, 1, bar[0] / s.shape[1], bar[1] / s.shape[0], bar[2] / s.shape[1], bar[3] / s.shape[0]])
+            target.append([0, 2, system[0]/s.shape[1], system[1]/s.shape[0], system[2]/s.shape[1], system[3]/s.shape[0]])
+
+        target = np.asarray(target, dtype=np.float32)
 
         unscaled_targets = np.copy(target)
         unscaled_targets[:, 2] *= s.shape[1]
@@ -118,9 +146,13 @@ class SequenceDataset(Dataset):
         add_per_staff = [self.staff_coords[piece_id][page_nr], self.add_per_staff[piece_id][page_nr]]
         piece_name = f"{self.piece_names[piece_id]}_page_{page_nr}"
 
+        # only use two minutes of audio to avoid GPU memory issues
+        truncated_signal = truncated_signal[- (120 * self.sample_rate):]
+
         sample = {'performance': truncated_signal,  'score': s[None], 'target': target,
                   'file_name': piece_name, 'is_onset': is_onset, 'interpol_c2o': interpol_c2o,
-                  'add_per_staff': add_per_staff, 'scale_factor': scale_factor, 'unscaled_target': unscaled_targets}
+                  'add_per_staff': add_per_staff, 'scale_factor': scale_factor, 'unscaled_target': unscaled_targets,
+                  't': t}
 
         if self.transform:
             sample = self.transform(sample)
@@ -170,10 +202,12 @@ def collate_wrapper(batch):
 
 
 def compute_batch_stats(detections, true_positions, piece_stats, file_names, file_interpols, file_add_per_staff):
-    gt = true_positions.float()[:, 2:4].cpu()
+    gt = true_positions.float().cpu()
     pred = detections[:, :2].detach().cpu()
 
     for num, fname in enumerate(file_names):
+
+        gt_note = gt[((gt[:, 0] == num) & (gt[:, 1] == 0))]
 
         if fname not in piece_stats:
             piece_stats[fname] = {}
@@ -181,25 +215,55 @@ def compute_batch_stats(detections, true_positions, piece_stats, file_names, fil
         if 'frame_diff' not in piece_stats[fname]:
             piece_stats[fname]['frame_diff'] = []
 
-        staff_coords, add_per_staff = file_add_per_staff[num]
+        if len(gt_note) == 1:
 
-        staff_id_pred = np.argwhere(min(staff_coords, key=lambda y: abs(y - pred[num][1])) == staff_coords).item()
-        staff_id_gt = np.argwhere(min(staff_coords, key=lambda y: abs(y - gt[num][1])) == staff_coords).item()
+            gt_note = gt_note[0, 2:4]
 
-        # unroll x coord
-        x_coord_gt = gt[num][0] + add_per_staff[staff_id_gt]
-        x_coord_pred = pred[num][0] + add_per_staff[staff_id_pred]
+            staff_coords, add_per_staff = file_add_per_staff[num]
 
-        # calculate difference of onset frames
-        frame_diff = abs(file_interpols[num](x_coord_pred) - file_interpols[num](x_coord_gt))
+            staff_id_pred = np.argwhere(min(staff_coords, key=lambda y: abs(y - pred[num][1])) == staff_coords).item()
+            staff_id_gt = np.argwhere(min(staff_coords, key=lambda y: abs(y - gt_note[1])) == staff_coords).item()
 
-        piece_stats[fname]['frame_diff'].append(frame_diff)
+            # unroll x coord
+            x_coord_gt = gt_note[0] + add_per_staff[staff_id_gt]
+            x_coord_pred = pred[num][0] + add_per_staff[staff_id_pred]
+
+            # calculate difference of onset frames
+            frame_diff = abs(file_interpols[num](x_coord_pred) - file_interpols[num](x_coord_gt))
+
+            piece_stats[fname]['frame_diff'].append(frame_diff)
 
     return piece_stats
 
 
-def load_dataset(path, augment=False, scale_width=416, split_file=None, ir_path=None,
-                 only_onsets=False, load_audio=True):
+def eval_class(prediction, targets, piece_stats, file_names, scale_factors, class_id=1, th=0.8):
+    gt_boxes = targets[targets[:, 1] == class_id][:, 2:]
+
+    pred_boxes = get_max_box(prediction, class_id=class_id)
+
+    pred_boxes *= scale_factors
+
+    pred_boxes = xywh2xyxy(pred_boxes)
+    gt_boxes = xywh2xyxy(gt_boxes)
+
+    iou = np.diagonal(box_iou(pred_boxes, gt_boxes).cpu().numpy())
+
+    for num, fname in enumerate(file_names):
+
+        if fname not in piece_stats:
+            piece_stats[fname] = {}
+
+        if class_id not in piece_stats[fname]:
+            piece_stats[fname][class_id] = []
+
+        # count as a correct prediction if iou is over a certain threshold
+        piece_stats[fname][class_id].append(int(iou[num] > th))
+
+    return piece_stats, pred_boxes/scale_factors
+
+
+def load_dataset(paths, augment=False, scale_width=416, split_files=None, ir_path=None,
+                 only_onsets=False, load_audio=True, predict_sb=False):
 
     scores = {}
     piece_names = {}
@@ -210,13 +274,17 @@ def load_dataset(path, augment=False, scale_width=416, split_file=None, ir_path=
     add_per_staff_all = {}
     params = []
 
-    if split_file is not None:
+    files = []
+    if split_files is not None:
+        assert len(split_files) == len(paths)
 
-        split = load_yaml(split_file)
-        files = [os.path.join(path, f'{file}.npz') for file in split['files']]
+        for idx, split_file in enumerate(split_files):
+            split = load_yaml(split_file)
+            files.extend([os.path.join(paths[idx], f'{file}.npz') for file in split['files']])
 
     else:
-        files = glob.glob(os.path.join(path, '*.npz'))
+        for path in paths:
+            files.extend(glob.glob(os.path.join(path, '*.npz')))
 
     for i, score_path in enumerate(files):
         params.append(dict(
@@ -253,8 +321,8 @@ def load_dataset(path, augment=False, scale_width=416, split_file=None, ir_path=
     else:
         transform = None
 
-    return SequenceDataset(scores, performances, all_sequences, piece_names, interpol_c2os,
-                           staff_coords_all, add_per_staff_all, augment=augment, transform=transform)
+    return SequenceDataset(scores, performances, all_sequences, piece_names, interpol_c2os, staff_coords_all,
+                           add_per_staff_all, augment=augment, transform=transform, predict_sb=predict_sb)
 
 
 def iterate_dataset(network, dataloader, criterion, optimizer=None, clip_grads=None,
@@ -313,6 +381,10 @@ def iterate_dataset(network, dataloader, criterion, optimizer=None, clip_grads=N
         piece_stats = compute_batch_stats(pred_boxes, unscaled_targets,
                                           piece_stats, data.file_names, data.interpols, data.add_per_staff)
 
+        for class_id in range(1, network.nc):
+            piece_stats, _ = eval_class(inference_out, unscaled_targets, piece_stats,
+                                        data.file_names, scale_factors, class_id=class_id)
+
         if is_main_process():
             progress_bar.update(1)
 
@@ -324,11 +396,18 @@ def iterate_dataset(network, dataloader, criterion, optimizer=None, clip_grads=N
         stat = piece_stats[key]
 
         assert key not in stats['piece_stats']
-        stats['piece_stats'][key] = stat['frame_diff']
+        stats['piece_stats'][key] = {'frame_diff': stat['frame_diff']}
 
         frame_diffs.extend(stat['frame_diff'])
 
+        for i in range(1, network.nc):
+            stats['piece_stats'][key][CLASS_MAPPING[i]+"_accuracy"] = float(np.mean(stat[i]))
+
     stats['frame_diffs_mean'] = float(np.mean(frame_diffs))
+
+    for i in range(1, network.nc):
+        stats[CLASS_MAPPING[i]+"_accuracy"] = float(np.mean([stats['piece_stats'][key][CLASS_MAPPING[i]+"_accuracy"]
+                                                             for key in stats['piece_stats'].keys()]))
 
     # add losses to statistics
     for key in losses:
