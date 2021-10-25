@@ -32,8 +32,9 @@ def initialize_weights(m):
 class Detect(nn.Module):
     stride = None  # strides computed during build
 
-    def __init__(self, anchors=(), ch=()):  # detection layer
+    def __init__(self, nc=1, anchors=(), ch=()):  # detection layer
         super(Detect, self).__init__()
+        self.nc = nc
         self.no = 5  # number of outputs per anchor (bbox and objectness)
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
@@ -58,7 +59,11 @@ class Detect(nn.Module):
                 y = x[i].sigmoid()
                 y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]  # xy
                 y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
-                z.append(y.view(bs, -1, self.no))
+                # z.append(y.view(bs, -1, self.no))
+
+                # add class idx for evaluation
+                y = torch.cat((y, torch.ones_like(y[..., 0:1])*i), axis=-1)
+                z.append(y.view(bs, -1, self.no + 1))
 
         if len(z) > 0:
             z = torch.cat(z, 1)
@@ -77,7 +82,7 @@ class Model(nn.Module):
         self.yaml = cfg  # model dict
 
         self.zdim = self.yaml['encoder']['params']['zdim']
-
+        self.nc = self.yaml['nc']
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
 
         print(f"Conditioning: {self.yaml['encoder']['type']} | Parameters: {self.yaml['encoder']['params']}")
@@ -86,6 +91,7 @@ class Model(nn.Module):
 
         self.spec_module = LogSpectrogram(sr=SAMPLE_RATE, fps=FPS, frame_size=FRAME_SIZE)
 
+        self.loss_type = self.yaml.get('loss_type', "mse")
         # Init weights, biases
         self.apply(initialize_weights)
 
@@ -128,7 +134,8 @@ class Model(nn.Module):
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
-    anchors = d['anchors']
+    anchors, nc = d['anchors'], d['nc']
+    activation = eval(d.get('activation', 'nn.ELU'))
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * 5  # number of outputs = anchors * 5 (5 bbox + objectness)
     groupnorm = d.get('groupnorm', False)
@@ -161,9 +168,9 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f]
 
         if m in [Conv,  Focus, Bottleneck]:
-            m_ = m(*args, groupnorm=groupnorm)  # module
+            m_ = m(*args, groupnorm=groupnorm, activation=activation)  # module
         elif m == FiLMConv:
-            m_ = m(*args, zdim=zdim, groupnorm=groupnorm)  # module
+            m_ = m(*args, zdim=zdim, groupnorm=groupnorm, activation=activation)  # module
         else:
             m_ = m(*args)  # module
 
