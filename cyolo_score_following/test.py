@@ -4,6 +4,7 @@ import torch
 
 import numpy as np
 
+from cyolo_score_following.dataset import CLASS_MAPPING
 from cyolo_score_following.models.yolo import load_pretrained_model
 from cyolo_score_following.utils.data_utils import load_piece_for_testing, SAMPLE_RATE, FPS, FRAME_SIZE, HOP_SIZE
 from cyolo_score_following.utils.general import xywh2xyxy
@@ -11,6 +12,7 @@ from cyolo_score_following.utils.video_utils import create_video, prepare_spec_f
 from tqdm import tqdm
 
 
+COLORS = [(0, 0, 1), (0, 0.5, 1), (0, 1, 0.5)]
 if __name__ == '__main__':
 
     import argparse
@@ -25,8 +27,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     piece_name = args.test_piece
-    org_scores, score, signal_np, systems, interpol_fnc, pad, scale_factor = load_piece_for_testing(args.test_dir,
-                                                                                           piece_name, args.scale_width)
+    org_scores, score, signal_np, systems, bars, interpol_fnc, pad, scale_factor, onsets = load_piece_for_testing(args.test_dir, piece_name, args.scale_width)
 
     if not args.gt_only:
 
@@ -58,12 +59,14 @@ if __name__ == '__main__':
 
     while to_ <= signal_np.shape[-1]:
         true_position = np.array(interpol_fnc(frame_idx), dtype=np.float32)
-
+        actual_system = int(true_position[2])
+        actual_bar = int(true_position[3])
         if actual_page != int(true_position[-1]):
             hidden = None
 
         actual_page = int(true_position[-1])
-        system = systems[int(true_position[2])]
+        system = systems[actual_system]
+        bar = bars[actual_bar]
         true_position = true_position[:2]
 
         if track_page is None or actual_page == track_page:
@@ -78,16 +81,27 @@ if __name__ == '__main__':
                     z, hidden = network.conditioning_network.get_conditioning(spec_frame, hidden=hidden)
                     inference_out, pred = network.predict(score_tensor[actual_page:actual_page+1], z)
 
-                _, idx = torch.sort(inference_out[0, :, 4], descending=True)
-                filtered_pred = inference_out[0, idx[:1]]
-                box = filtered_pred[..., :4]
-                conf = filtered_pred[..., 4]
-                x1, y1, x2, y2 = xywh2xyxy(box).cpu().numpy().T
+                x1, y1, x2, y2 = [], [], [], []
+                for class_idx in range(network.nc):
+                    filtered_inference_out = inference_out[
+                        # 0, inference_out[0, :, 5:].argmax(-1) == class_idx].unsqueeze(0)
+                        0, inference_out[0, :, -1] == class_idx].unsqueeze(0)
 
-                x1 = x1 * scale_factor - pad
-                x2 = x2 * scale_factor - pad
-                y1 = y1 * scale_factor
-                y2 = y2 * scale_factor
+                    _, idx = torch.sort(filtered_inference_out[0, :, 4], descending=True)
+                    filtered_pred = filtered_inference_out[0, idx[:1]]
+                    box = filtered_pred[..., :4]
+                    conf = filtered_pred[..., 4]
+
+                    x1_, y1_, x2_, y2_ = xywh2xyxy(box).cpu().numpy().T
+                    x1.append(x1_)
+                    y1.append(y1_)
+                    x2.append(x2_)
+                    y2.append(y2_)
+
+                x1 = np.concatenate(x1) * scale_factor - pad
+                x2 = np.concatenate(x2) * scale_factor - pad
+                y1 = np.concatenate(y1) * scale_factor
+                y2 = np.concatenate(y2) * scale_factor
 
                 if vis_spec is not None:
                     vis_spec = np.roll(vis_spec, -1, axis=1)
@@ -104,9 +118,23 @@ if __name__ == '__main__':
             plot_line([center_x - pad, center_y, height], img_pred, label="GT",
                       color=(0.96, 0.63, 0.25), line_thickness=2)
 
-            if not args.gt_only:
+            if center_x > 0:
+                plot_line([center_x - pad, center_y, height], img_pred, label="GT Note", color=(0.96, 0.63, 0.25), line_thickness=2)
 
-                plot_box([x1, y1, x2, y2], img_pred, label="Pred", color=(0, 0, 1), line_thickness=2)
+            plot_box(xywh2xyxy(np.asarray([[system['x'] - pad, system['y'],
+                                                system['w'], system['h']]]))[0].astype(np.int).tolist(),
+                         img_pred, color=(0.25, 0.71, 0.96), line_thickness=2, label="GT System")
+
+            plot_box(xywh2xyxy(np.asarray([[bar['x'] - pad, bar['y'],
+                                                bar['w'], bar['h']]]))[0].astype(np.int).tolist(),
+                         img_pred, color=(0.96, 0.24, 0.69), line_thickness=2, label="GT Bar")
+
+            if not args.gt_only:
+                for i in range(network.nc-1, -1, -1):
+                    pred_label = f"Pred {CLASS_MAPPING[i]}"
+                    plot_box([x1[i], y1[i], x2[i], y2[i]], img_pred, label=pred_label,
+                                 color=COLORS[i % len(COLORS)], line_thickness=2)
+
                 perf_img = prepare_spec_for_render(vis_spec, img_pred)
             else:
                 perf_img = np.zeros((img_pred.shape[0], 200, 3))
@@ -117,14 +145,6 @@ if __name__ == '__main__':
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.8
             line_type = 2
-
-            # write header text
-            cv2.putText(img, 'Frame: {}'.format(frame_idx),
-                        (850, 40),
-                        font,
-                        font_scale,
-                        (255, 255, 255),
-                        line_type)
 
             if args.plot:
 

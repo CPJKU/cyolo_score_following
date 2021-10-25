@@ -84,20 +84,34 @@ def train(args):
 
     network, criterion = yolo_model_and_criterion(args.config)
 
+    predict_sb = network.nc == 3
     print(network)
+
+    if args.param_path is not None:
+
+        print('Loading model from {}'.format(args.param_path))
+        try:
+            network.load_state_dict(torch.load(args.param_path, map_location=lambda storage, location: storage))
+        except:
+            network = nn.parallel.DataParallel(network)
+            network.load_state_dict(torch.load(args.param_path, map_location=lambda storage, location: storage))
+            network = network.module
 
     if args.distributed:
         torch.cuda.set_device(args.gpu)
         network.cuda(args.gpu)
         network = nn.parallel.DistributedDataParallel(network, device_ids=[args.gpu], output_device=args.gpu)
+        network.nc = network.module.nc
+        network.loss_type = network.module.loss_type
     else:
         network.to(device)
 
-    train_dataset = load_dataset(args.train_set, augment=args.augment, scale_width=args.scale_width,
-                                 split_file=args.train_split_file, ir_path=args.ir_path, load_audio=args.load_audio)
+    train_dataset = load_dataset(args.train_sets, augment=args.augment, scale_width=args.scale_width,
+                                 split_files=args.train_split_files, ir_path=args.ir_path, load_audio=args.load_audio,
+                                 predict_sb=predict_sb)
 
-    val_dataset = load_dataset(args.val_set, augment=False, scale_width=args.scale_width,
-                               split_file=args.val_split_file,  load_audio=args.load_audio)
+    val_dataset = load_dataset(args.val_sets, augment=False, scale_width=args.scale_width,
+                               split_files=args.val_split_files,  load_audio=args.load_audio, predict_sb=predict_sb)
 
     batch_size = train_parameters['batch_size']
 
@@ -192,6 +206,14 @@ def train(args):
             log_writer.add_scalar(f'training/frame_diff', train_diff, epoch)
             log_writer.add_scalar(f'validation/frame_diff', val_diff, epoch)
 
+            if 'Bar_accuracy' in tr_stats:
+                log_writer.add_scalar(f'training/Bar_accuracy', tr_stats['Bar_accuracy'].item(), epoch)
+                log_writer.add_scalar(f'validation/Bar_accuracy', val_stats['Bar_accuracy'].item(), epoch)
+
+            if 'System_accuracy' in tr_stats:
+                log_writer.add_scalar(f'training/System_accuracy', tr_stats['System_accuracy'].item(), epoch)
+                log_writer.add_scalar(f'validation/System_accuracy', val_stats['System_accuracy'].item(), epoch)
+
             # log losses
             for key in tr_stats:
                 if "loss" in key:
@@ -222,15 +244,16 @@ if __name__ == '__main__':
     parser.add_argument('--log_root', help='path to log directory', type=str, default="runs")
     parser.add_argument('--no_log', help='do not log', default=False, action='store_true')
     parser.add_argument('--num_workers', default=4, type=int)
+    parser.add_argument('--param_path', help='load network weights', type=str, default=None)
     parser.add_argument('--seed', help='random seed.', type=int, default=4711)
     parser.add_argument('--tag', help='experiment tag.', type=str)
     parser.add_argument('--scale_width', help='sheet image scale factor.', type=int, default=416)
-    parser.add_argument('--train_set', help='path to train dataset.')
-    parser.add_argument('--train_split_file', help='split file to only train on a subset from the train dir',
-                        default=None)
-    parser.add_argument('--val_set', help='path to validation dataset.')
-    parser.add_argument('--val_split_file', help='split file to only evaluate a subset from the validation dir',
-                        default=None)
+    parser.add_argument('--train_sets', help='path to train datasets.', nargs='+')
+    parser.add_argument('--train_split_files', help='split files to only train on a subset from the train dirs',
+                        default=None, nargs='+')
+    parser.add_argument('--val_sets', help='path to validation datasets.', nargs='+')
+    parser.add_argument('--val_split_files', help='split files to only evaluate a subset from the validation disr',
+                        default=None, nargs='+')
 
     # arguments for optimizer and scheduler
     parser.add_argument('--batch_size', help='batch size.', type=int, default=32)
