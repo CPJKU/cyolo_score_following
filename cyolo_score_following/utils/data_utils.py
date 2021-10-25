@@ -18,7 +18,7 @@ def load_piece(path, piece_name):
     npzfile = np.load(os.path.join(path, piece_name + '.npz'), allow_pickle=True)
 
     scores = npzfile["sheets"]
-    coords, systems = list(npzfile["coords"]), list(npzfile['systems'])
+    coords, systems, bars = list(npzfile["coords"]), list(npzfile['systems']), list(npzfile['bars'])
 
     synthesized = npzfile['synthesized'].item()
     n_pages, h, w = scores.shape
@@ -36,7 +36,8 @@ def load_piece(path, piece_name):
 
     onsets = []
     for i in range(len(coords)):
-        coords[i]['note_x'] += pad1
+        if coords[i]['note_x'] > 0:
+            coords[i]['note_x'] += pad1
 
         # onset time to frame
         coords[i]['onset'] = int(coords[i]['onset'] * FPS)
@@ -44,6 +45,9 @@ def load_piece(path, piece_name):
 
     for i in range(len(systems)):
         systems[i]['x'] += pad1
+
+    for i in range(len(bars)):
+        bars[i]['x'] += pad1
 
     onsets = np.asarray(onsets, dtype=np.int)
 
@@ -64,11 +68,13 @@ def load_piece(path, piece_name):
         note_x = np.mean(
             np.asarray(onset_coords_merged['note_x'])[np.asarray(onset_coords_merged['system_idx']) == system_idx])
         page_nr = int(Counter(onset_coords_merged['page_nr']).most_common(1)[0][0])
+        bar_idx = int(Counter(onset_coords_merged['bar_idx']).most_common(1)[0][0])
 
         # set y to staff center
-        note_y = systems[system_idx]['y']
-        coords_new.append([note_y, note_x, system_idx, page_nr])
-
+        note_y = -1.0
+        if note_x > 0:
+            note_y = systems[system_idx]['y']
+        coords_new.append([note_y, note_x, system_idx, bar_idx, page_nr])
     coords_new = np.asarray(coords_new)
 
     # we want to match the frames to the coords of the previous onset, as the notes at the next coord position
@@ -76,7 +82,7 @@ def load_piece(path, piece_name):
     interpol_fnc = interpolate.interp1d(onsets, coords_new.T, kind='previous', bounds_error=False,
                                         fill_value=(coords_new[0, :], coords_new[-1, :]))
 
-    return padded_scores, scores, onsets, coords_new, systems, interpol_fnc, signal, pad1, synthesized
+    return padded_scores, scores, onsets, coords_new, bars, systems, interpol_fnc, signal, pad1, synthesized
 
 
 def load_sequences(params):
@@ -87,7 +93,7 @@ def load_sequences(params):
     scale_width = params['scale_width']
     load_audio = params.get('load_audio', True)
 
-    padded_scores, _, onsets, coords_new, systems, interpol_fnc, signal, pad, synthesized = load_piece(path, piece_name)
+    padded_scores, _, onsets, coords_new, bars, systems, interpol_fnc, signal, pad, synthesized = load_piece(path, piece_name)
 
     scores = 1 - np.array(padded_scores, dtype=np.float32) / 255.
 
@@ -140,14 +146,17 @@ def load_sequences(params):
     curr_page = 0
 
     page_systems = {}
+    page_bars = {}
 
     for page_idx in valid_pages:
         page_systems[page_idx] = list(filter(lambda x: x['page_nr'] == page_idx, systems))
+        page_bars[page_idx] = list(filter(lambda bar: bar['page_nr'] == page_idx, bars))
 
     for frame in range(n_frames):
 
         true_position = np.asarray(interpol_fnc(frame), dtype=np.int32)
 
+        bar_idx = true_position[3]
         system_idx = true_position[2]
 
         # figure out at which frame we change pages
@@ -155,7 +164,12 @@ def load_sequences(params):
             curr_page = true_position[-1]
             start_frame = frame
 
+        bar = bars[bar_idx]
         system = systems[system_idx]
+
+        true_bar = np.asarray([bar['x'], bar['y'], bar['w'], bar['h']], dtype=np.float)
+        true_system = np.asarray([system['x'], system['y'], system['w'], system['h']], dtype=np.float)
+
         systems_xywh = np.asarray([[x['x'], x['y'], x['w'], x['h']] for x in page_systems[curr_page]])
         systems_xyxy = xywh2xyxy(systems_xywh)
 
@@ -171,6 +185,8 @@ def load_sequences(params):
                                 'max_x_shift': max_x_shift,
                                 'max_y_shift': max_y_shift,
                                 'true_position': true_position,
+                                'true_system': true_system,
+                                'true_bar': true_bar,
                                 'height': system['h'],
                                 'synthesized': synthesized,
                                 'scale_factor': scale_factor,
@@ -184,7 +200,7 @@ def load_sequences(params):
 
 def load_piece_for_testing(path, piece_name, scale_width):
 
-    padded_scores, org_scores, _, _, systems, interpol_fnc, signal, pad, _ = load_piece(path, piece_name)
+    padded_scores, org_scores, onsets, _, bars, systems, interpol_fnc, signal, pad, _ = load_piece(path, piece_name)
 
     scores = 1 - np.array(padded_scores, dtype=np.float32) / 255.
 
@@ -203,4 +219,4 @@ def load_piece_for_testing(path, piece_name, scale_width):
 
         org_scores_rgb.append(cv2.cvtColor(org_score, cv2.COLOR_GRAY2BGR))
 
-    return org_scores_rgb, score, signal, systems, interpol_fnc, pad, scale_factor
+    return org_scores_rgb, score, signal, systems, bars, interpol_fnc, pad, scale_factor, onsets
