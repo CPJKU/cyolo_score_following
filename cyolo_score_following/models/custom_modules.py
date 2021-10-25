@@ -111,25 +111,22 @@ class TemporalBatchNorm(nn.Module):
 class Conv(nn.Module):
     """adapted from https://github.com/ultralytics/yolov5/blob/master/models/common.py"""
     # Standard convolution
-    def __init__(self, c1, c2, k=1, s=1, p=None, groupnorm=False):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, groupnorm=False, activation=nn.ELU):
         super(Conv, self).__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), bias=False)
         self.norm = nn.GroupNorm(1, c2) if groupnorm else nn.BatchNorm2d(c2)
-        self.act = nn.ELU()
+        self.act = activation(inplace=True)
 
     def forward(self, x):
         return self.act(self.norm(self.conv(x)))
-
-    def fuseforward(self, x):
-        return self.act(self.conv(x))
 
 
 class Focus(nn.Module):
     """taken from https://github.com/ultralytics/yolov5/blob/master/models/common.py"""
     # Focus wh information into c-space
-    def __init__(self, c1, c2, k=1, s=1, p=None, groupnorm=False):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, groupnorm=False, activation=nn.ELU):
         super(Focus, self).__init__()
-        self.conv = Conv(c1 * 4, c2, k, s, p, groupnorm=groupnorm)
+        self.conv = Conv(c1 * 4, c2, k, s, p, groupnorm=groupnorm, activation=activation)
 
     def forward(self, x):  # x(b,c,w,h) -> y(b,4c,w/2,h/2)
         return self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))
@@ -148,11 +145,11 @@ class Concat(nn.Module):
 
 class FiLMConv(nn.Module):
 
-    def __init__(self, c1, c2, k=1, s=1, p=None, zdim=128, groupnorm=False):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, zdim=128, groupnorm=False, activation=nn.ELU):
         super(FiLMConv, self).__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), bias=False)
         self.norm = nn.GroupNorm(1, c2) if groupnorm else nn.BatchNorm2d(c2)
-        self.act = nn.ELU()
+        self.act = activation(inplace=True)
 
         self.gamma = nn.Linear(zdim, c2)
         self.beta = nn.Linear(zdim, c2)
@@ -181,7 +178,7 @@ class Bottleneck(nn.Module):
 
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, base_width=64, groupnorm=False):
+    def __init__(self, inplanes, planes, stride=1, base_width=64, groupnorm=False, activation=nn.ELU):
         super(Bottleneck, self).__init__()
 
         width = int(planes * (base_width / 64.))
@@ -193,7 +190,7 @@ class Bottleneck(nn.Module):
         self.norm2 = nn.GroupNorm(1, width) if groupnorm else nn.BatchNorm2d(width)
         self.conv3 = nn.Conv2d(width, planes * self.expansion, kernel_size=(1, 1), stride=(1, 1), bias=False)
         self.norm3 = nn.GroupNorm(1, planes * self.expansion) if groupnorm else nn.BatchNorm2d(planes * self.expansion)
-        self.activation = nn.ELU(inplace=True)
+        self.activation = activation(inplace=True)
 
         # self.downsample = downsample
         self.downsample = None
