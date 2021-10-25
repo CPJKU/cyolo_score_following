@@ -1,0 +1,41 @@
+# parameters
+nc: 3
+groupnorm: True
+activation: nn.ELU
+encoder: {'type': ContextConditioning, 'params': {'n_lstm_layers': 1, 'activation': nn.ELU,
+                                                  'zdim': 128, 'normalize_input': True}}
+
+# anchors
+anchors:
+  - [11,26,  11,34,  11,45]  # P3/8
+  - [61,32,  77,40,  148,34]
+  - [249,33,  267,33,  267,40]
+
+# YOLO backbone
+backbone:
+  # [from, number, module, args]
+  [[-1, Focus, [16, 3]],  # 0-P1/2
+   [-1, Conv, [32, 3, 2]],  # 1-P2/4
+   [-1, Bottleneck, [32, 1, 32]],
+   [-1, Conv, [64, 3, 2]],  # 3-P3/8
+   [-1, Bottleneck, [64, 1, 32]],
+   [-1, FiLMConv, [128, 3, 2]],  # 5-P4/16
+   [-1, Bottleneck, [128, 1, 32]],
+   [-1, FiLMConv, [128, 3, 2]],  # 7-P5/32
+   [-1, Bottleneck, [128, 1, 32]],
+  ]
+
+# YOLO head
+head:
+  [[-1, FiLMConv, [128, 3, 1]],
+   [-1, nn.Upsample, [None, 2, 'nearest']],
+   [[-1, 6], Concat, [1]],  # cat backbone P4
+   [-1, Bottleneck, [128, 1, 32]],
+
+   [-1, FiLMConv, [128, 3, 1]],
+   [-1, nn.Upsample, [None, 2, 'nearest']],
+   [[-1, 4], Concat, [1]],  # cat backbone P3
+   [-1, Bottleneck, [128, 1, 32]],
+
+   [[16, 16, 16, ], Detect, [nc, anchors]],  # Detect(P3, P4)
+  ]
