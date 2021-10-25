@@ -10,7 +10,7 @@ from setuptools import setup
 setup(
     name='cyolo_score_following',
     version='0.1dev',
-    description='Multi-modal Conditional Bounding Box Regression for Music Score Following',
+    description='Real-time Music Following in Score Sheet Images via Multi-resolution Prediction',
     packages=setuptools.find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
