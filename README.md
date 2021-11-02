@@ -1,4 +1,4 @@
-## Multi-modal Conditional Bounding Box Regression for Music Score Following
+## Real-time Music Following in Score Sheet Images via Multi-resolution Prediction
 
 This repository contains the corresponding code for our paper
 
