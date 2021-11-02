@@ -122,11 +122,11 @@ if __name__ == '__main__':
                 plot_line([center_x - pad, center_y, height], img_pred, label="GT Note", color=(0.96, 0.63, 0.25), line_thickness=2)
 
             plot_box(xywh2xyxy(np.asarray([[system['x'] - pad, system['y'],
-                                                system['w'], system['h']]]))[0].astype(np.int).tolist(),
+                                                system['w'], system['h']]]))[0].astype(int).tolist(),
                          img_pred, color=(0.25, 0.71, 0.96), line_thickness=2, label="GT System")
 
             plot_box(xywh2xyxy(np.asarray([[bar['x'] - pad, bar['y'],
-                                                bar['w'], bar['h']]]))[0].astype(np.int).tolist(),
+                                                bar['w'], bar['h']]]))[0].astype(int).tolist(),
                          img_pred, color=(0.96, 0.24, 0.69), line_thickness=2, label="GT Bar")
 
             if not args.gt_only:
