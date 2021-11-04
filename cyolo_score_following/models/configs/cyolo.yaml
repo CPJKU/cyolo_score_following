@@ -1,4 +1,5 @@
 # parameters
+nc: 1
 groupnorm: True
 encoder: {'type': ContextConditioning, 'params': {'n_lstm_layers': 1, 'activation': nn.ELU,
                                                   'zdim': 128, 'normalize_input': True}}
@@ -33,5 +34,5 @@ head:
    [[-1, 4], Concat, [1]],  # cat backbone P3
    [-1, Bottleneck, [128, 1, 32]],
 
-   [[16, ], Detect, [anchors]],  # Detect(P3, P4)
+   [[16, ], Detect, [nc, anchors]],  # Detect(P3, P4)
   ]
